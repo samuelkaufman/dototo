@@ -1,0 +1,7 @@
+{
+  "name": "particle-sim",
+  "private": true,
+  "scripts": {
+    "build": "python3 build.py"
+  }
+}
