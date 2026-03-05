@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Red/Blue Particle Simulation</title>
+<title>QQZ World</title>
 <style>
   * { margin: 0; padding: 0; }
   body { background: #000; overflow: hidden; }
@@ -12,11 +12,12 @@
 <body>
 <canvas id="c"></canvas>
 <script>
-// ==================.=== CONSTANTS YOU CAN MODIFY =====================
+// ===================== CONSTANTS YOU CAN MODIFY =====================
 const NUM_PARTICLES = 5000;
-const SPEED = 0.002*20*2;
-const VERTICAL_SPEED = 0.001*20;
-const LOOKAHEAD_PX = 20;       // pixels ahead to check for obstacles
+const NUM_POPULATIONS = 3;
+const MUTATION_CHANCE = 0.05;
+const BASE_SPEED = 0.004;
+const LOOKAHEAD_PX = 20;
 // ====================================================================
 
 const canvas = document.getElementById('c');
@@ -54,8 +55,8 @@ function createProgram(vsSrc, fsSrc) {
 }
 
 // =================== PASS 1: PRESENCE MAP ===================
-// Renders particles into a screen-sized texture.
-// R = red particle present, G = blue particle present.
+// Renders particles into a half-res texture with additive blending.
+// R = count, G = color sum, B = size sum, A = speed sum (all scaled).
 
 const presenceVS = `__PRESENCE_VERT__`;
 
@@ -67,7 +68,7 @@ const u_pres_count = gl.getUniformLocation(presenceProg, 'u_count');
 const a_pres_index = gl.getAttribLocation(presenceProg, 'a_index');
 
 // =================== PASS 2: UPDATE ===================
-// Reads state + presence. Looks ahead for collisions.
+// Reads state + presence. 8-dir movement, dodging, collision, mutation.
 
 const updateVS = `__UPDATE_VERT__`;
 
@@ -76,11 +77,11 @@ const updateFS = `__UPDATE_FRAG__`;
 const updateProg = createProgram(updateVS, updateFS);
 const u_update_state = gl.getUniformLocation(updateProg, 'u_state');
 const u_update_presence = gl.getUniformLocation(updateProg, 'u_presence');
-const u_update_speed = gl.getUniformLocation(updateProg, 'u_speed');
-const u_update_vspeed = gl.getUniformLocation(updateProg, 'u_vspeed');
+const u_update_baseSpeed = gl.getUniformLocation(updateProg, 'u_baseSpeed');
 const u_update_resolution = gl.getUniformLocation(updateProg, 'u_resolution');
 const u_update_lookahead = gl.getUniformLocation(updateProg, 'u_lookahead');
 const u_update_time = gl.getUniformLocation(updateProg, 'u_time');
+const u_update_mutationChance = gl.getUniformLocation(updateProg, 'u_mutationChance');
 const a_update_pos = gl.getAttribLocation(updateProg, 'a_pos');
 
 // =================== PASS 3: RENDER ===================
@@ -116,12 +117,25 @@ const texWidth = NUM_PARTICLES;
 const texHeight = 1;
 
 const initData = new Float32Array(texWidth * 4);
+
+// Pre-generate N population templates
+const populations = [];
+for (let p = 0; p < NUM_POPULATIONS; p++) {
+  populations.push({
+    color: Math.floor(Math.random() * 16),     // 0-15
+    direction: Math.floor(Math.random() * 8),  // 0-7
+    size: Math.floor(Math.random() * 8),       // 0-7
+    speed: Math.floor(Math.random() * 8),      // 0-7
+  });
+}
+
 for (let i = 0; i < NUM_PARTICLES; i++) {
   const b = i * 4;
-  initData[b + 0] = Math.random();
-  initData[b + 1] = Math.random();
-  initData[b + 2] = Math.random() > 0.5 ? 1.0 : 0.0;
-  initData[b + 3] = 0.4 + Math.random() * 1.2; // speed multiplier 0.4–1.6
+  const pop = populations[i % NUM_POPULATIONS];
+  initData[b + 0] = Math.random();                                  // x
+  initData[b + 1] = Math.random();                                  // y
+  initData[b + 2] = (pop.color * 8 + pop.direction);                // packed color+direction
+  initData[b + 3] = (pop.size * 8 + pop.speed);                     // packed size+speed
 }
 
 function makeTex(data, w, h, type, filter) {
@@ -204,11 +218,11 @@ function frame() {
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, presTex);
   gl.uniform1i(u_update_presence, 1);
-  gl.uniform1f(u_update_speed, SPEED);
-  gl.uniform1f(u_update_vspeed, VERTICAL_SPEED);
+  gl.uniform1f(u_update_baseSpeed, BASE_SPEED);
   gl.uniform2f(u_update_resolution, canvas.width, canvas.height);
   gl.uniform1f(u_update_lookahead, LOOKAHEAD_PX);
   gl.uniform1f(u_update_time, performance.now() * 0.001);
+  gl.uniform1f(u_update_mutationChance, MUTATION_CHANCE);
 
   gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
   gl.enableVertexAttribArray(a_update_pos);
