@@ -14,10 +14,11 @@
 <script>
 // ===================== CONSTANTS YOU CAN MODIFY =====================
 const NUM_PARTICLES = 5000;
-const NUM_POPULATIONS = 3;
-const MUTATION_CHANCE = 0.05;
-const BASE_SPEED = 0.004;
-const LOOKAHEAD_PX = 20;
+const NUM_POPULATIONS = 1;
+const MUTATION_CHANCE = 0.1;  // DNA mixing on collision
+const WILD_MUTATION_CHANCE = 0.00005;  // fully random mutation on collision
+const BASE_SPEED = 0.1;
+const LOOKAHEAD_PX = 25;
 // ====================================================================
 
 const canvas = document.getElementById('c');
@@ -82,6 +83,7 @@ const u_update_resolution = gl.getUniformLocation(updateProg, 'u_resolution');
 const u_update_lookahead = gl.getUniformLocation(updateProg, 'u_lookahead');
 const u_update_time = gl.getUniformLocation(updateProg, 'u_time');
 const u_update_mutationChance = gl.getUniformLocation(updateProg, 'u_mutationChance');
+const u_update_wildMutationChance = gl.getUniformLocation(updateProg, 'u_wildMutationChance');
 const a_update_pos = gl.getAttribLocation(updateProg, 'a_pos');
 
 // =================== PASS 3: RENDER ===================
@@ -122,7 +124,7 @@ const initData = new Float32Array(texWidth * 4);
 const populations = [];
 for (let p = 0; p < NUM_POPULATIONS; p++) {
   populations.push({
-    color: Math.floor(Math.random() * 16),     // 0-15
+    color: Math.floor(p * 16 / NUM_POPULATIONS), // evenly spaced across palette
     direction: Math.floor(Math.random() * 8),  // 0-7
     size: Math.floor(Math.random() * 8),       // 0-7
     speed: Math.floor(Math.random() * 8),      // 0-7
@@ -179,7 +181,7 @@ function ensurePresence() {
   presW = w; presH = h;
   if (presTex) gl.deleteTexture(presTex);
   if (presFBO) gl.deleteFramebuffer(presFBO);
-  presTex = makeTex(null, presW, presH, gl.UNSIGNED_BYTE, gl.LINEAR);
+  presTex = makeTex(null, presW, presH, gl.UNSIGNED_BYTE, gl.NEAREST);
   presFBO = makeFBO(presTex);
 }
 
@@ -223,6 +225,7 @@ function frame() {
   gl.uniform1f(u_update_lookahead, LOOKAHEAD_PX);
   gl.uniform1f(u_update_time, performance.now() * 0.001);
   gl.uniform1f(u_update_mutationChance, MUTATION_CHANCE);
+  gl.uniform1f(u_update_wildMutationChance, WILD_MUTATION_CHANCE);
 
   gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
   gl.enableVertexAttribArray(a_update_pos);

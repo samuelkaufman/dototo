@@ -7,6 +7,7 @@ uniform vec2 u_resolution;
 uniform float u_lookahead;
 uniform float u_time;
 uniform float u_mutationChance;
+uniform float u_wildMutationChance;
 
 const float PI = 3.14159265359;
 
@@ -43,16 +44,17 @@ void main() {
   // Convert lookahead from pixels to UV space
   vec2 laUV = vec2(u_lookahead / u_resolution.x, u_lookahead / u_resolution.y);
 
-  // Sample presence map ahead
+  // Sample presence map ahead (for dodging) and at current position (for collision)
   vec2 ahead = fract(vec2(x, y) + moveDir * laUV + 1.0);
   vec4 presAhead = texture2D(u_presence, ahead);
-
-  bool collided = false;
+  vec4 presHere = texture2D(u_presence, vec2(x, y));
 
   // Obstacle threshold: more than ~1 particle ahead
-  if (presAhead.r > 1.5 / 64.0) {
-    // Per-particle dodge chance (fixed for lifetime, 0-60%)
-    float dodgeChance = hash(vec2(v_uv.x, 0.123)) * 0.6;
+  bool obstacleAhead = presAhead.r > 1.5 / 64.0;
+
+  if (obstacleAhead) {
+    // Per-particle dodge chance (fixed for lifetime, 50-95%)
+    float dodgeChance = 0.5 + hash(vec2(v_uv.x, 0.123)) * 0.45;
     float dodgeRoll = hash(vec2(v_uv.x, u_time));
 
     if (dodgeRoll < dodgeChance) {
@@ -62,24 +64,11 @@ void main() {
         ? mod(direction + 2.0, 8.0)
         : mod(direction + 6.0, 8.0);
 
-      // Check if dodge path is clear
       vec2 dodgeMoveDir = dirVec(dodgeDir);
-      vec2 dodgeAhead = fract(vec2(x, y) + dodgeMoveDir * laUV + 1.0);
-      vec4 presDodge = texture2D(u_presence, dodgeAhead);
-
-      if (presDodge.r < 1.5 / 64.0) {
-        // Dodge succeeds: move perpendicular (don't change stored direction)
-        x += dodgeMoveDir.x * u_baseSpeed * speedMul;
-        y += dodgeMoveDir.y * u_baseSpeed * speedMul;
-      } else {
-        // Dodge path also blocked: collision
-        collided = true;
-        x += moveDir.x * u_baseSpeed * speedMul;
-        y += moveDir.y * u_baseSpeed * speedMul;
-      }
+      x += dodgeMoveDir.x * u_baseSpeed * speedMul;
+      y += dodgeMoveDir.y * u_baseSpeed * speedMul;
     } else {
-      // No dodge attempt: collision
-      collided = true;
+      // Failed to dodge: move forward into obstacle
       x += moveDir.x * u_baseSpeed * speedMul;
       y += moveDir.y * u_baseSpeed * speedMul;
     }
@@ -93,27 +82,41 @@ void main() {
   x = fract(x + 1.0);
   y = fract(y + 1.0);
 
-  // Mutation on collision
+  // Collision = particles actually overlapping at current position (>3 particles here)
+  // This is separate from dodging — only mutate when truly on top of each other
+  bool collided = presHere.r > 3.5 / 64.0;
+
   if (collided) {
     float mutRoll = hash(vec2(v_uv.x, u_time * 3.0 + 0.5));
     if (mutRoll < u_mutationChance) {
-      // Recover average attributes from presence map
-      if (presAhead.r > 0.5 / 64.0) {
-        float avgColor = clamp(presAhead.g * 16.0 / presAhead.r - 0.5, 0.0, 15.0);
-        float avgSize  = clamp(presAhead.b * 8.0 / presAhead.r - 0.5, 0.0, 7.0);
-        float avgSpeed = clamp(presAhead.a * 8.0 / presAhead.r - 0.5, 0.0, 7.0);
+      // Recover average attributes from presence at current position
+      float avgColor = clamp(presHere.g * 16.0 / presHere.r - 0.5, 0.0, 15.0);
+      float avgSize  = clamp(presHere.b * 8.0 / presHere.r - 0.5, 0.0, 7.0);
+      float avgSpeed = clamp(presHere.a * 8.0 / presHere.r - 0.5, 0.0, 7.0);
 
-        // Random interpolation between own and average
-        float mixF1 = hash(vec2(v_uv.x, u_time * 4.0));
-        float mixF2 = hash(vec2(v_uv.x, u_time * 5.0));
-        float mixF3 = hash(vec2(v_uv.x, u_time * 6.0));
+      // Random interpolation between own and average
+      float mixF1 = hash(vec2(v_uv.x, u_time * 4.0));
+      float mixF2 = hash(vec2(v_uv.x, u_time * 5.0));
+      float mixF3 = hash(vec2(v_uv.x, u_time * 6.0));
 
-        color = floor(clamp(mix(color, avgColor, mixF1) + 0.5, 0.0, 15.0));
-        size  = floor(clamp(mix(size, avgSize, mixF2) + 0.5, 0.0, 7.0));
-        speed = floor(clamp(mix(speed, avgSpeed, mixF3) + 0.5, 0.0, 7.0));
+      color = floor(clamp(mix(color, avgColor, mixF1) + 0.5, 0.0, 15.0));
+      size  = floor(clamp(mix(size, avgSize, mixF2) + 0.5, 0.0, 7.0));
+      speed = floor(clamp(mix(speed, avgSpeed, mixF3) + 0.5, 0.0, 7.0));
 
-        // Direction: random new value (not stored in presence map)
-        direction = floor(hash(vec2(v_uv.x, u_time * 7.0)) * 8.0);
+      // Direction: random new value (not stored in presence map)
+      direction = floor(hash(vec2(v_uv.x, u_time * 7.0)) * 8.0);
+      direction = clamp(direction, 0.0, 7.0);
+    } else {
+      // Wild mutation: completely random attributes (introduces new diversity)
+      float wildRoll = hash(vec2(v_uv.x, u_time * 8.0 + 0.7));
+      if (wildRoll < u_wildMutationChance) {
+        color = floor(hash(vec2(v_uv.x, u_time * 9.0)) * 16.0);
+        color = clamp(color, 0.0, 15.0);
+        size = floor(hash(vec2(v_uv.x, u_time * 10.0)) * 8.0);
+        size = clamp(size, 0.0, 7.0);
+        speed = floor(hash(vec2(v_uv.x, u_time * 11.0)) * 8.0);
+        speed = clamp(speed, 0.0, 7.0);
+        direction = floor(hash(vec2(v_uv.x, u_time * 12.0)) * 8.0);
         direction = clamp(direction, 0.0, 7.0);
       }
     }

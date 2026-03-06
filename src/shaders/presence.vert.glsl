@@ -21,5 +21,5 @@ void main() {
   v_speed = packed_a - v_size * 8.0;
 
   gl_Position = vec4(x, y, 0.0, 1.0);
-  gl_PointSize = v_size + 1.0 + 4.0;
+  gl_PointSize = v_size + 2.0;  // actual size + small padding
 }
