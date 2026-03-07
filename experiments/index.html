@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>QQZ World</title>
+<style>
+  * { margin: 0; padding: 0; }
+  body { background: #000; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ===================== CONSTANTS YOU CAN MODIFY =====================
+const NUM_PARTICLES = 5000;
+const NUM_POPULATIONS = 4;
+const MUTATION_CHANCE = 0.001;
+const BASE_SPEED = 0.01;
+const LOOKAHEAD_PX = 15;
+// ====================================================================
+
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { preserveDrawingBuffer: false });
+if (!gl) { alert('No WebGL'); throw new Error('No WebGL'); }
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function compileShader(src, type) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(s));
+    throw new Error('Shader compile failed');
+  }
+  return s;
+}
+
+function createProgram(vsSrc, fsSrc) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compileShader(vsSrc, gl.VERTEX_SHADER));
+  gl.attachShader(p, compileShader(fsSrc, gl.FRAGMENT_SHADER));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(p));
+    throw new Error('Program link failed');
+  }
+  return p;
+}
+
+// =================== PASS 1: PRESENCE MAP ===================
+// Renders particles into a half-res texture with additive blending.
+// R = count, G = color sum, B = size sum, A = speed sum (all scaled).
+
+const presenceVS = `attribute float a_index;
+uniform sampler2D u_state;
+uniform float u_count;
+varying float v_color;
+varying float v_size;
+varying float v_speed;
+
+void main() {
+  float u = (a_index + 0.5) / u_count;
+  vec4 data = texture2D(u_state, vec2(u, 0.5));
+  float x = data.r * 2.0 - 1.0;
+  float y = data.g * 2.0 - 1.0;
+
+  // Unpack B channel: color*8 + direction
+  float packed_b = floor(data.b + 0.5);
+  v_color = floor(packed_b / 8.0);
+
+  // Unpack A channel: size*8 + speed
+  float packed_a = floor(data.a + 0.5);
+  v_size = floor(packed_a / 8.0);
+  v_speed = packed_a - v_size * 8.0;
+
+  gl_Position = vec4(x, y, 0.0, 1.0);
+  gl_PointSize = v_size + 1.0 + 4.0;
+}`;
+
+const presenceFS = `precision mediump float;
+varying float v_color;
+varying float v_size;
+varying float v_speed;
+
+void main() {
+  vec2 c = gl_PointCoord - 0.5;
+  if (dot(c, c) > 0.25) discard;
+
+  // Encode aggregate data for additive blending (UNSIGNED_BYTE texture)
+  // Scale values small enough to avoid saturation with ~64 overlapping particles
+  float count_inc = 1.0 / 64.0;
+  float color_inc = (v_color + 0.5) / (16.0 * 64.0);
+  float size_inc  = (v_size + 0.5) / (8.0 * 64.0);
+  float speed_inc = (v_speed + 0.5) / (8.0 * 64.0);
+
+  gl_FragColor = vec4(count_inc, color_inc, size_inc, speed_inc);
+}`;
+
+const presenceProg = createProgram(presenceVS, presenceFS);
+const u_pres_state = gl.getUniformLocation(presenceProg, 'u_state');
+const u_pres_count = gl.getUniformLocation(presenceProg, 'u_count');
+const a_pres_index = gl.getAttribLocation(presenceProg, 'a_index');
+
+// =================== PASS 2: UPDATE ===================
+// Reads state + presence. 8-dir movement, dodging, collision, mutation.
+
+const updateVS = `attribute vec2 a_pos;
+varying vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+
+const updateFS = `precision highp float;
+varying vec2 v_uv;
+uniform sampler2D u_state;
+uniform sampler2D u_presence;
+uniform float u_baseSpeed;
+uniform vec2 u_resolution;
+uniform float u_lookahead;
+uniform float u_time;
+uniform float u_mutationChance;
+
+const float PI = 3.14159265359;
+
+// Energy constants
+const float BASE_DRAIN = 0.003;
+const float SPEED_COST = 0.00005;
+const float SIZE_COST = 0.00003;
+const float FOOD_GAIN = 0.002;
+const float FOOD_THRESHOLD = 0.3;
+const float COLLISION_COST = 0.0001;
+const float FLOCK_BONUS = 0.0002;
+const float REBIRTH_ENERGY = 0.45;
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// Procedural food zones: slowly drifting patches
+float foodNoise(vec2 pos, float time) {
+  float n = 0.0;
+  n += sin(pos.x * 3.0 + time * 0.1) * sin(pos.y * 4.0 + time * 0.15);
+  n += sin(pos.x * 7.0 - time * 0.08) * sin(pos.y * 5.0 - time * 0.12) * 0.5;
+  n += sin(pos.x * 13.0 + time * 0.05) * sin(pos.y * 11.0 + time * 0.07) * 0.25;
+  return n;
+}
+
+// Direction index 0-7 -> movement vector
+// 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW
+vec2 dirVec(float dir) {
+  float angle = dir * PI / 4.0;
+  return vec2(sin(angle), cos(angle));
+}
+
+void main() {
+  vec4 data = texture2D(u_state, v_uv);
+  float x = data.r;
+  float y = data.g;
+
+  // Unpack B channel: color*8 + direction
+  float packed_b = floor(data.b + 0.5);
+  float color = floor(packed_b / 8.0);
+  float direction = packed_b - color * 8.0;
+
+  // Unpack A channel: integer part = size*8 + speed, fractional part = energy
+  float intPart = floor(data.a);
+  float energy = data.a - intPart;
+  float size = floor(intPart / 8.0);
+  float speed = intPart - size * 8.0;
+
+  // === ENERGY DRAIN ===
+  energy -= BASE_DRAIN;
+  energy -= speed * SPEED_COST;
+  energy -= size * SIZE_COST;
+
+  // === FOOD ZONES ===
+  float food = foodNoise(vec2(x, y) * 6.2832, u_time);
+  if (food > FOOD_THRESHOLD) {
+    energy += FOOD_GAIN;
+  }
+
+  // === MOVEMENT ===
+  vec2 moveDir = dirVec(direction);
+  float speedMul = 0.5 + speed / 7.0 * 1.5; // 0.5 to 2.0
+
+  // Convert lookahead from pixels to UV space
+  vec2 laUV = vec2(u_lookahead / u_resolution.x, u_lookahead / u_resolution.y);
+
+  // Sample presence map ahead
+  vec2 ahead = fract(vec2(x, y) + moveDir * laUV + 1.0);
+  vec4 presAhead = texture2D(u_presence, ahead);
+
+  bool collided = false;
+
+  // Obstacle threshold: more than ~1 particle ahead
+  if (presAhead.r > 1.5 / 64.0) {
+    float dodgeChance = hash(vec2(v_uv.x, 0.123)) * 0.6;
+    float dodgeRoll = hash(vec2(v_uv.x, u_time));
+
+    if (dodgeRoll < dodgeChance) {
+      float sideRoll = hash(vec2(v_uv.x, u_time * 2.0));
+      float dodgeDir = sideRoll < 0.5
+        ? mod(direction + 2.0, 8.0)
+        : mod(direction + 6.0, 8.0);
+
+      vec2 dodgeMoveDir = dirVec(dodgeDir);
+      vec2 dodgeAhead = fract(vec2(x, y) + dodgeMoveDir * laUV + 1.0);
+      vec4 presDodge = texture2D(u_presence, dodgeAhead);
+
+      if (presDodge.r < 1.5 / 64.0) {
+        x += dodgeMoveDir.x * u_baseSpeed * speedMul;
+        y += dodgeMoveDir.y * u_baseSpeed * speedMul;
+      } else {
+        collided = true;
+        x += moveDir.x * u_baseSpeed * speedMul;
+        y += moveDir.y * u_baseSpeed * speedMul;
+      }
+    } else {
+      collided = true;
+      x += moveDir.x * u_baseSpeed * speedMul;
+      y += moveDir.y * u_baseSpeed * speedMul;
+    }
+  } else {
+    x += moveDir.x * u_baseSpeed * speedMul;
+    y += moveDir.y * u_baseSpeed * speedMul;
+  }
+
+  // Toroidal wrapping
+  x = fract(x + 1.0);
+  y = fract(y + 1.0);
+
+  // === COLLISION EFFECTS ===
+  if (collided) {
+    // Energy cost from collision
+    energy -= COLLISION_COST;
+
+    // Mutation on collision (existing mechanic)
+    float mutRoll = hash(vec2(v_uv.x, u_time * 3.0 + 0.5));
+    if (mutRoll < u_mutationChance) {
+      if (presAhead.r > 0.5 / 64.0) {
+        float avgColor = clamp(presAhead.g * 16.0 / presAhead.r - 0.5, 0.0, 15.0);
+        float avgSize  = clamp(presAhead.b * 8.0 / presAhead.r - 0.5, 0.0, 7.0);
+        float avgSpeed = clamp(presAhead.a * 8.0 / presAhead.r - 0.5, 0.0, 7.0);
+
+        float mixF1 = hash(vec2(v_uv.x, u_time * 4.0));
+        float mixF2 = hash(vec2(v_uv.x, u_time * 5.0));
+        float mixF3 = hash(vec2(v_uv.x, u_time * 6.0));
+
+        color = floor(clamp(mix(color, avgColor, mixF1) + 0.5, 0.0, 15.0));
+        size  = floor(clamp(mix(size, avgSize, mixF2) + 0.5, 0.0, 7.0));
+        speed = floor(clamp(mix(speed, avgSpeed, mixF3) + 0.5, 0.0, 7.0));
+
+        direction = floor(hash(vec2(v_uv.x, u_time * 7.0)) * 8.0);
+        direction = clamp(direction, 0.0, 7.0);
+      }
+    }
+  }
+
+  // === FLOCKING BONUS ===
+  // Sample presence at current position for neighbor info
+  vec4 presHere = texture2D(u_presence, vec2(x, y));
+  if (presHere.r > 0.5 / 64.0) {
+    float avgColorHere = presHere.g * 16.0 / presHere.r - 0.5;
+    // Bonus if surrounded by similar color
+    float colorDist = abs(color - avgColorHere);
+    if (colorDist < 3.0) {
+      energy += FLOCK_BONUS * (3.0 - colorDist) / 3.0;
+    }
+  }
+
+  // === DEATH & REBIRTH ===
+  if (energy <= 0.0) {
+    // Sample 4 random particles, find highest-energy parent
+    float r0 = hash(vec2(v_uv.x, u_time * 10.0 + 0.1));
+    float r1 = hash(vec2(v_uv.x, u_time * 10.0 + 0.2));
+    float r2 = hash(vec2(v_uv.x, u_time * 10.0 + 0.3));
+    float r3 = hash(vec2(v_uv.x, u_time * 10.0 + 0.4));
+
+    vec4 c0 = texture2D(u_state, vec2(r0, 0.5));
+    vec4 c1 = texture2D(u_state, vec2(r1, 0.5));
+    vec4 c2 = texture2D(u_state, vec2(r2, 0.5));
+    vec4 c3 = texture2D(u_state, vec2(r3, 0.5));
+
+    // Extract energy (fractional part of A channel)
+    float e0 = c0.a - floor(c0.a);
+    float e1 = c1.a - floor(c1.a);
+    float e2 = c2.a - floor(c2.a);
+    float e3 = c3.a - floor(c3.a);
+
+    // Pick the parent with highest energy
+    vec4 parent = c0;
+    float bestE = e0;
+    if (e1 > bestE) { parent = c1; bestE = e1; }
+    if (e2 > bestE) { parent = c2; bestE = e2; }
+    if (e3 > bestE) { parent = c3; bestE = e3; }
+
+    // Unpack parent genes
+    float pB = floor(parent.b + 0.5);
+    float pColor = floor(pB / 8.0);
+    float pDir = pB - pColor * 8.0;
+    float pIntA = floor(parent.a);
+    float pSize = floor(pIntA / 8.0);
+    float pSpeed = pIntA - pSize * 8.0;
+
+    // Clone with small mutations (±1)
+    float m1 = hash(vec2(v_uv.x, u_time * 11.0));
+    float m2 = hash(vec2(v_uv.x, u_time * 12.0));
+    float m3 = hash(vec2(v_uv.x, u_time * 13.0));
+    float m4 = hash(vec2(v_uv.x, u_time * 14.0));
+    float m5 = hash(vec2(v_uv.x, u_time * 15.0));
+
+    color = clamp(pColor + (m1 < 0.33 ? -1.0 : (m1 > 0.66 ? 1.0 : 0.0)), 0.0, 15.0);
+    direction = mod(pDir + (m2 < 0.33 ? -1.0 : (m2 > 0.66 ? 1.0 : 0.0)) + 8.0, 8.0);
+    size = clamp(pSize + (m3 < 0.33 ? -1.0 : (m3 > 0.66 ? 1.0 : 0.0)), 0.0, 7.0);
+    speed = clamp(pSpeed + (m4 < 0.33 ? -1.0 : (m4 > 0.66 ? 1.0 : 0.0)), 0.0, 7.0);
+
+    // Respawn at random position
+    x = hash(vec2(v_uv.x, u_time * 16.0));
+    y = hash(vec2(v_uv.x, u_time * 17.0));
+
+    energy = REBIRTH_ENERGY;
+  }
+
+  // Clamp energy
+  energy = clamp(energy, 0.0, 0.9);
+
+  // Re-pack
+  float new_b = color * 8.0 + direction;
+  float new_a = floor(size * 8.0 + speed) + energy;
+
+  gl_FragColor = vec4(x, y, new_b, new_a);
+}
+`;
+
+const updateProg = createProgram(updateVS, updateFS);
+const u_update_state = gl.getUniformLocation(updateProg, 'u_state');
+const u_update_presence = gl.getUniformLocation(updateProg, 'u_presence');
+const u_update_baseSpeed = gl.getUniformLocation(updateProg, 'u_baseSpeed');
+const u_update_resolution = gl.getUniformLocation(updateProg, 'u_resolution');
+const u_update_lookahead = gl.getUniformLocation(updateProg, 'u_lookahead');
+const u_update_time = gl.getUniformLocation(updateProg, 'u_time');
+const u_update_mutationChance = gl.getUniformLocation(updateProg, 'u_mutationChance');
+const a_update_pos = gl.getAttribLocation(updateProg, 'a_pos');
+
+// =================== PASS 3: RENDER ===================
+
+const renderVS = `attribute float a_index;
+uniform sampler2D u_state;
+uniform float u_count;
+varying float v_colorIndex;
+varying float v_energy;
+
+void main() {
+  float u = (a_index + 0.5) / u_count;
+  vec4 data = texture2D(u_state, vec2(u, 0.5));
+  float x = data.r * 2.0 - 1.0;
+  float y = data.g * 2.0 - 1.0;
+
+  // Unpack B channel: color*8 + direction
+  float packed_b = floor(data.b + 0.5);
+  v_colorIndex = floor(packed_b / 8.0);  // 0-15
+
+  // Unpack A channel: integer part = size*8 + speed, fractional part = energy
+  float intPart = floor(data.a);
+  float size = floor(intPart / 8.0);    // 0-7
+  v_energy = data.a - intPart;          // 0.0-0.9
+
+  gl_Position = vec4(x, y, 0.0, 1.0);
+  gl_PointSize = size + 1.0;  // 1-8 pixels
+}
+`;
+
+const renderFS = `precision mediump float;
+varying float v_colorIndex;
+varying float v_energy;
+
+vec3 fireColor(float index) {
+  float t = index / 15.0;
+  vec3 c;
+  if (t < 0.25) {
+    // dark red -> red
+    c = mix(vec3(0.1, 0.0, 0.0), vec3(0.7, 0.0, 0.0), t / 0.25);
+  } else if (t < 0.5) {
+    // red -> orange
+    c = mix(vec3(0.7, 0.0, 0.0), vec3(1.0, 0.5, 0.0), (t - 0.25) / 0.25);
+  } else if (t < 0.75) {
+    // orange -> yellow
+    c = mix(vec3(1.0, 0.5, 0.0), vec3(1.0, 1.0, 0.0), (t - 0.5) / 0.25);
+  } else {
+    // yellow -> white
+    c = mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 1.0, 1.0), (t - 0.75) / 0.25);
+  }
+  return c;
+}
+
+void main() {
+  vec2 c = gl_PointCoord - 0.5;
+  if (dot(c, c) > 0.25) discard;
+  vec3 col = fireColor(v_colorIndex);
+  // Energy scales brightness: dim when starving, bright when thriving
+  float brightness = 0.15 + 0.85 * clamp(v_energy / 0.9, 0.0, 1.0);
+  gl_FragColor = vec4(col * brightness, 1.0);
+}
+`;
+
+const renderProg = createProgram(renderVS, renderFS);
+const u_render_state = gl.getUniformLocation(renderProg, 'u_state');
+const u_render_count = gl.getUniformLocation(renderProg, 'u_count');
+const a_render_index = gl.getAttribLocation(renderProg, 'a_index');
+
+// ======================== BUFFERS ========================
+
+const quadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+const indices = new Float32Array(NUM_PARTICLES);
+for (let i = 0; i < NUM_PARTICLES; i++) indices[i] = i;
+const indexBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, indexBuf);
+gl.bufferData(gl.ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+// ======================== TEXTURES ========================
+
+const extFloat = gl.getExtension('OES_texture_float');
+if (!extFloat) { alert('OES_texture_float required'); throw new Error(); }
+gl.getExtension('WEBGL_color_buffer_float');
+
+const texWidth = NUM_PARTICLES;
+const texHeight = 1;
+
+const initData = new Float32Array(texWidth * 4);
+
+// Pre-generate N population templates
+const populations = [];
+for (let p = 0; p < NUM_POPULATIONS; p++) {
+  populations.push({
+    color: Math.floor(Math.random() * 16),     // 0-15
+    direction: Math.floor(Math.random() * 8),  // 0-7
+    size: Math.floor(Math.random() * 8),       // 0-7
+    speed: Math.floor(Math.random() * 8),      // 0-7
+  });
+}
+
+for (let i = 0; i < NUM_PARTICLES; i++) {
+  const b = i * 4;
+  const pop = populations[i % NUM_POPULATIONS];
+  initData[b + 0] = Math.random();                                  // x
+  initData[b + 1] = Math.random();                                  // y
+  initData[b + 2] = (pop.color * 8 + pop.direction);                // packed color+direction
+  initData[b + 3] = Math.floor(pop.size * 8 + pop.speed) + 0.45;   // packed size+speed + energy
+}
+
+function makeTex(data, w, h, type, filter) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, type, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return tex;
+}
+
+function makeFBO(tex) {
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return fbo;
+}
+
+// Ping-pong
+let texA = makeTex(initData, texWidth, texHeight, gl.FLOAT, gl.NEAREST);
+let texB = makeTex(null, texWidth, texHeight, gl.FLOAT, gl.NEAREST);
+let fboA = makeFBO(texA);
+let fboB = makeFBO(texB);
+let readTex = texA, writeFBO = fboB;
+
+function swap() {
+  if (readTex === texA) { readTex = texB; writeFBO = fboA; }
+  else { readTex = texA; writeFBO = fboB; }
+}
+
+// Presence buffer (recreated on resize)
+let presW = 0, presH = 0, presTex = null, presFBO = null;
+
+function ensurePresence() {
+  const w = Math.ceil(canvas.width / 2);
+  const h = Math.ceil(canvas.height / 2);
+  if (w === presW && h === presH) return;
+  presW = w; presH = h;
+  if (presTex) gl.deleteTexture(presTex);
+  if (presFBO) gl.deleteFramebuffer(presFBO);
+  presTex = makeTex(null, presW, presH, gl.UNSIGNED_BYTE, gl.LINEAR);
+  presFBO = makeFBO(presTex);
+}
+
+// ======================== LOOP ========================
+
+function frame() {
+  ensurePresence();
+
+  // --- Pass 1: Presence ---
+  gl.bindFramebuffer(gl.FRAMEBUFFER, presFBO);
+  gl.viewport(0, 0, presW, presH);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE);
+
+  gl.useProgram(presenceProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, readTex);
+  gl.uniform1i(u_pres_state, 0);
+  gl.uniform1f(u_pres_count, NUM_PARTICLES);
+  gl.bindBuffer(gl.ARRAY_BUFFER, indexBuf);
+  gl.enableVertexAttribArray(a_pres_index);
+  gl.vertexAttribPointer(a_pres_index, 1, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.POINTS, 0, NUM_PARTICLES);
+  gl.disable(gl.BLEND);
+
+  // --- Pass 2: Update ---
+  gl.bindFramebuffer(gl.FRAMEBUFFER, writeFBO);
+  gl.viewport(0, 0, texWidth, texHeight);
+
+  gl.useProgram(updateProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, readTex);
+  gl.uniform1i(u_update_state, 0);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, presTex);
+  gl.uniform1i(u_update_presence, 1);
+  gl.uniform1f(u_update_baseSpeed, BASE_SPEED);
+  gl.uniform2f(u_update_resolution, canvas.width, canvas.height);
+  gl.uniform1f(u_update_lookahead, LOOKAHEAD_PX);
+  gl.uniform1f(u_update_time, performance.now() * 0.001);
+  gl.uniform1f(u_update_mutationChance, MUTATION_CHANCE);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(a_update_pos);
+  gl.vertexAttribPointer(a_update_pos, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  swap();
+
+  // --- Pass 3: Draw to screen ---
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0, 0, 0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  gl.useProgram(renderProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, readTex);
+  gl.uniform1i(u_render_state, 0);
+  gl.uniform1f(u_render_count, NUM_PARTICLES);
+  gl.bindBuffer(gl.ARRAY_BUFFER, indexBuf);
+  gl.enableVertexAttribArray(a_render_index);
+  gl.vertexAttribPointer(a_render_index, 1, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.POINTS, 0, NUM_PARTICLES);
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
