@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Red/Blue Particle Simulation</title>
+<style>
+  * { margin: 0; padding: 0; }
+  body { background: #000; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ==================.=== CONSTANTS YOU CAN MODIFY =====================
+const SPEED_MULT=4;
+const NUM_PARTICLES =10;
+const SPEED = 0.002*SPEED_MULT;
+const VERTICAL_SPEED = 0.002*SPEED_MULT;
+const LOOKAHEAD_PX = 1;       // pixels ahead to check for obstacles
+// ====================================================================
+
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { preserveDrawingBuffer: false });
+if (!gl) { alert('No WebGL'); throw new Error('No WebGL'); }
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function compileShader(src, type) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(s));
+    throw new Error('Shader compile failed');
+  }
+  return s;
+}
+
+function createProgram(vsSrc, fsSrc) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compileShader(vsSrc, gl.VERTEX_SHADER));
+  gl.attachShader(p, compileShader(fsSrc, gl.FRAGMENT_SHADER));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(p));
+    throw new Error('Program link failed');
+  }
+  return p;
+}
+
+// =================== PASS 1: PRESENCE MAP ===================
+// Renders particles into a screen-sized texture.
+// R = red particle present, G = blue particle present.
+
+const presenceVS = `
+attribute float a_index;
+uniform sampler2D u_state;
+uniform float u_count;
+varying float v_color;
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void main() {
+  float u = (a_index + 0.5) / u_count;
+  vec4 data = texture2D(u_state, vec2(u, 0.5));
+  float x = data.r * 2.0 - 1.0;
+  float y = data.g * 2.0 - 1.0;
+  v_color = data.b;
+  float size = 1.0 + hash(vec2(u, 0.7)) * 3.0; // 1–8 per particle
+  gl_Position = vec4(x, y, 0.0, 1.0);
+  gl_PointSize = size + 4.0;
+}`;
+
+const presenceFS = `
+precision mediump float;
+varying float v_color;
+void main() {
+  vec2 c = gl_PointCoord - 0.5;
+  if (dot(c, c) > 0.25) discard;
+  if (v_color > 0.5) {
+    gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+  } else {
+    gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
+  }
+}`;
+
+const presenceProg = createProgram(presenceVS, presenceFS);
+const u_pres_state = gl.getUniformLocation(presenceProg, 'u_state');
+const u_pres_count = gl.getUniformLocation(presenceProg, 'u_count');
+const a_pres_index = gl.getAttribLocation(presenceProg, 'a_index');
+
+// =================== PASS 2: UPDATE ===================
+// Reads state + presence. Looks ahead for collisions.
+
+const updateVS = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main() {
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+
+const updateFS = `
+precision highp float;
+varying vec2 v_uv;
+uniform sampler2D u_state;
+uniform sampler2D u_presence;
+uniform float u_speed;
+uniform float u_vspeed;
+uniform vec2 u_resolution;
+uniform float u_lookahead;
+uniform float u_time;
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void main() {
+  vec4 data = texture2D(u_state, v_uv);
+  float x = data.r;
+  float y = data.g;
+  float color = data.b;
+  float speedMul = data.a*.1;
+
+  float dirX = color > 0.5 ? 1.0 : -1.0;
+
+  // Convert lookahead from pixels to UV space
+  float laU = u_lookahead / u_resolution.x;
+
+  // Sample presence texture ahead of this particle
+  // Check a couple points ahead for robustness
+  vec2 ahead1 = vec2(fract(x + dirX * laU * 0.5 + 1.0), y);
+  vec2 ahead2 = vec2(fract(x + dirX * laU + 1.0), y);
+  vec4 p1 = texture2D(u_presence, ahead1);
+  vec4 p2 = texture2D(u_presence, ahead2);
+
+  // Detect obstacle: any particle presence ahead
+  float obstacle = 0.0;
+  if (color > 0.5) {
+    // Red: dodge both blue and red
+    obstacle = max(p1.g + p1.r * 0.9, p2.g + p2.r * 1.5);
+  } else {
+    // Blue: dodge both red and blue
+    obstacle = max(p1.r + p1.g * 0.9, p2.r + p2.g * 0.9);
+  }
+
+  // Always move horizontally (scaled by per-particle speed)
+
+  // If obstacle ahead, also move vertically
+  if (obstacle > 1.1) {
+    float dirY = color > 0.5 ? 1.0 : -1.0;
+    // Per-particle dodge chance (0–40%), fixed for the particle's lifetime
+    float dodgeChance = hash(vec2(v_uv.x, 0.0)) * .9;
+    // Roll each frame to decide whether to flip
+    float r = hash(vec2(v_uv.x, u_time));
+    if (r < dodgeChance) dirY = -dirY;
+   // y += dirY * u_vspeed * speedMul;
+   // y = fract(y + 1.0);
+  } else {
+    // x += dirX * u_speed * speedMul;
+    // x = fract(x + 1.0);
+}
+
+gl_FragColor = vec4(x, y, color, 1);
+// gl_FragColor = vec4(x, y, color, speedMul);
+	}`;
+
+	const updateProg = createProgram(updateVS, updateFS);
+	const u_update_state = gl.getUniformLocation(updateProg, 'u_state');
+	const u_update_presence = gl.getUniformLocation(updateProg, 'u_presence');
+	const u_update_speed = gl.getUniformLocation(updateProg, 'u_speed');
+	const u_update_vspeed = gl.getUniformLocation(updateProg, 'u_vspeed');
+	const u_update_resolution = gl.getUniformLocation(updateProg, 'u_resolution');
+	const u_update_lookahead = gl.getUniformLocation(updateProg, 'u_lookahead');
+	const u_update_time = gl.getUniformLocation(updateProg, 'u_time');
+	const a_update_pos = gl.getAttribLocation(updateProg, 'a_pos');
+
+	// =================== PASS 3: RENDER ===================
+
+	const renderVS = `
+	attribute float a_index;
+	uniform sampler2D u_state;
+	uniform float u_count;
+	varying float v_color;
+	varying float v_alpha;
+
+	float hash(vec2 p) {
+	  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+	}
+
+	void main() {
+	  float u = (a_index + 0.5) / u_count;
+	  vec4 data = texture2D(u_state, vec2(u, 0.5));
+	  float x = data.r * 2.0 - 1.0;
+	  float y = data.g * 2.0 - 1.0;
+	  v_color = data.b;
+	  v_alpha = data.a;
+	  // float size = 1.0 + hash(vec2(u, 0.7)) * 30.0; // 1–8 per particle
+	  gl_Position = vec4(x, y, 0.0, 1.0);
+	  gl_PointSize = 4.0;
+	}`;
+
+	const renderFS = `
+	precision mediump float;
+	varying float v_color;
+	varying float v_alpha;
+	void main() {
+	  vec2 c = gl_PointCoord - 0.5;
+	  if (dot(c, c) > 0.25) discard;
+	  if (v_color > 0.5) {
+	    gl_FragColor = vec4(1, 0.04, 0.00, 1);
+	  } else {
+	    gl_FragColor = vec4(0.6, 0.8, 1.0, 1);
+	  }
+	}`;
+
+	const renderProg = createProgram(renderVS, renderFS);
+	const u_render_state = gl.getUniformLocation(renderProg, 'u_state');
+	const u_render_count = gl.getUniformLocation(renderProg, 'u_count');
+	const a_render_index = gl.getAttribLocation(renderProg, 'a_index');
+
+	// ======================== BUFFERS ========================
+
+	const quadBuf = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+	const indices = new Float32Array(NUM_PARTICLES);
+	for (let i = 0; i < NUM_PARTICLES; i++) indices[i] = i;
+	const indexBuf = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, indexBuf);
+	gl.bufferData(gl.ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+	// ======================== TEXTURES ========================
+
+	const extFloat = gl.getExtension('OES_texture_float');
+	if (!extFloat) { alert('OES_texture_float required'); throw new Error(); }
+	gl.getExtension('WEBGL_color_buffer_float');
+
+	const texWidth = NUM_PARTICLES;
+	const texHeight = 1;
+
+	const initData = new Float32Array(texWidth * 4);
+	for (let i = 0; i < NUM_PARTICLES; i++) {
+	  const b = i * 4;
+	  initData[b + 0] = Math.random();
+	  initData[b + 1] = Math.random();
+	  initData[b + 2] = Math.random() > 0.5 ? 1.0 : 0.0;
+	  initData[b + 3] = 0.4 + Math.random() * .5; // speed multiplier 0.4–1.6
+	  initData[b + 3] = 0;
+	}
+
+	function makeTex(data, w, h, type, filter) {
+	  const tex = gl.createTexture();
+	  gl.bindTexture(gl.TEXTURE_2D, tex);
+	  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, type, data);
+	  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+	  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+	  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+	  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+	  return tex;
+	}
+
+	function makeFBO(tex) {
+	  const fbo = gl.createFramebuffer();
+	  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+	  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+	  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+	  return fbo;
+	}
+
+	// Ping-pong
+	let texA = makeTex(initData, texWidth, texHeight, gl.FLOAT, gl.NEAREST);
+	let texB = makeTex(null, texWidth, texHeight, gl.FLOAT, gl.NEAREST);
+	let fboA = makeFBO(texA);
+	let fboB = makeFBO(texB);
+	let readTex = texA, writeFBO = fboB;
+
+	function swap() {
+	  if (readTex === texA) { readTex = texB; writeFBO = fboA; }
+	  else { readTex = texA; writeFBO = fboB; }
+	}
+
+	// Presence buffer (recreated on resize)
+	let presW = 0, presH = 0, presTex = null, presFBO = null;
+
+	function ensurePresence() {
+	  const w = Math.ceil(canvas.width / 2);
+	  const h = Math.ceil(canvas.height / 2);
+	  if (w === presW && h === presH) return;
+	  presW = w; presH = h;
+	  if (presTex) gl.deleteTexture(presTex);
+	  if (presFBO) gl.deleteFramebuffer(presFBO);
+	  presTex = makeTex(null, presW, presH, gl.UNSIGNED_BYTE, gl.LINEAR);
+	  presFBO = makeFBO(presTex);
+	}
+
+	// ======================== LOOP ========================
+
+	function frame() {
+	  ensurePresence();
+
+	  // --- Pass 1: Presence ---
+	  gl.bindFramebuffer(gl.FRAMEBUFFER, presFBO);
+	  gl.viewport(0, 0, presW, presH);
+	  gl.clearColor(0, 0, 0, 0);
+	  gl.clear(gl.COLOR_BUFFER_BIT);
+	  gl.enable(gl.BLEND);
+	  gl.blendFunc(gl.ONE, gl.ONE);
+
+	  gl.useProgram(presenceProg);
+	  gl.activeTexture(gl.TEXTURE0);
+	  gl.bindTexture(gl.TEXTURE_2D, readTex);
+	  gl.uniform1i(u_pres_state, 0);
+	  gl.uniform1f(u_pres_count, NUM_PARTICLES);
+	  gl.bindBuffer(gl.ARRAY_BUFFER, indexBuf);
+	  gl.enableVertexAttribArray(a_pres_index);
+	  gl.vertexAttribPointer(a_pres_index, 1, gl.FLOAT, false, 0, 0);
+	  gl.drawArrays(gl.POINTS, 0, NUM_PARTICLES);
+	  gl.disable(gl.BLEND);
+
+	  // --- Pass 2: Update ---
+	  gl.bindFramebuffer(gl.FRAMEBUFFER, writeFBO);
+	  gl.viewport(0, 0, texWidth, texHeight);
+
+	  gl.useProgram(updateProg);
+	  gl.activeTexture(gl.TEXTURE0);
+	  gl.bindTexture(gl.TEXTURE_2D, readTex);
+	  gl.uniform1i(u_update_state, 0);
+	  gl.activeTexture(gl.TEXTURE1);
+	  gl.bindTexture(gl.TEXTURE_2D, presTex);
+	  gl.uniform1i(u_update_presence, 1);
+	  gl.uniform1f(u_update_speed, SPEED);
+	  gl.uniform1f(u_update_vspeed, VERTICAL_SPEED);
+	  gl.uniform2f(u_update_resolution, canvas.width, canvas.height);
+	  gl.uniform1f(u_update_lookahead, LOOKAHEAD_PX);
+	  gl.uniform1f(u_update_time, performance.now() * 0.001);
+
+	  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+	  gl.enableVertexAttribArray(a_update_pos);
+	  gl.vertexAttribPointer(a_update_pos, 2, gl.FLOAT, false, 0, 0);
+	  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+	  swap();
+
+	  // --- Pass 3: Draw to screen ---
+	  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+	  gl.viewport(0, 0, canvas.width, canvas.height);
+	  gl.clearColor(0, 0, 0, 1);
+	  gl.clear(gl.COLOR_BUFFER_BIT);
+
+	  gl.useProgram(renderProg);
+	  gl.activeTexture(gl.TEXTURE0);
+	  gl.bindTexture(gl.TEXTURE_2D, readTex);
+	  gl.uniform1i(u_render_state, 0);
+	  gl.uniform1f(u_render_count, NUM_PARTICLES);
+	  gl.bindBuffer(gl.ARRAY_BUFFER, indexBuf);
+	  gl.enableVertexAttribArray(a_render_index);
+	  gl.vertexAttribPointer(a_render_index, 1, gl.FLOAT, false, 0, 0);
+	  gl.drawArrays(gl.POINTS, 0, NUM_PARTICLES);
+
+	  requestAnimationFrame(frame);
+	}
+
+	requestAnimationFrame(frame);
+	</script>
+	</body>
+	</html>

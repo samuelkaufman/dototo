@@ -11,12 +11,12 @@ uniform float u_mutationChance;
 const float PI = 3.14159265359;
 
 // Energy constants
-const float BASE_DRAIN = 0.0003;
+const float BASE_DRAIN = 0.003;
 const float SPEED_COST = 0.00005;
 const float SIZE_COST = 0.00003;
 const float FOOD_GAIN = 0.002;
 const float FOOD_THRESHOLD = 0.3;
-const float COLLISION_COST = 0.01;
+const float COLLISION_COST = 0.0001;
 const float FLOCK_BONUS = 0.0002;
 const float REBIRTH_ENERGY = 0.45;
 
