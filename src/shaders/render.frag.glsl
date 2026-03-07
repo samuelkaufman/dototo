@@ -1,5 +1,6 @@
 precision mediump float;
 varying float v_colorIndex;
+varying float v_energy;
 
 vec3 fireColor(float index) {
   float t = index / 15.0;
@@ -24,5 +25,7 @@ void main() {
   vec2 c = gl_PointCoord - 0.5;
   if (dot(c, c) > 0.25) discard;
   vec3 col = fireColor(v_colorIndex);
-  gl_FragColor = vec4(col, 1.0);
+  // Energy scales brightness: dim when starving, bright when thriving
+  float brightness = 0.15 + 0.85 * clamp(v_energy / 0.9, 0.0, 1.0);
+  gl_FragColor = vec4(col * brightness, 1.0);
 }

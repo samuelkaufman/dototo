@@ -135,7 +135,7 @@ for (let i = 0; i < NUM_PARTICLES; i++) {
   initData[b + 0] = Math.random();                                  // x
   initData[b + 1] = Math.random();                                  // y
   initData[b + 2] = (pop.color * 8 + pop.direction);                // packed color+direction
-  initData[b + 3] = (pop.size * 8 + pop.speed);                     // packed size+speed
+  initData[b + 3] = Math.floor(pop.size * 8 + pop.speed) + 0.45;   // packed size+speed + energy
 }
 
 function makeTex(data, w, h, type, filter) {
