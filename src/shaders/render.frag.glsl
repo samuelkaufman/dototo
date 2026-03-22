@@ -21,6 +21,7 @@ void main() {
   if (dot(c, c) > 0.25) discard;
   vec3 col = spectrumColor(v_colorIndex);
   // Energy scales brightness: dim when starving, bright when thriving
-  float brightness = 0.15 + 0.85 * clamp(v_energy / 0.9, 0.0, 1.0);
+  // float brightness = 0.15 + 0.85 * clamp(v_energy / 0.9, 0.0, 1.0);
+  float brightness = 1.0;
   gl_FragColor = vec4(col * brightness, 1.0);
 }
