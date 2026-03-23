@@ -7,6 +7,7 @@ uniform vec2 u_resolution;
 uniform float u_lookahead;
 uniform float u_time;
 uniform float u_mutationChance;
+uniform float u_collisionThresh;
 
 const float PI = 3.14159265359;
 
@@ -62,8 +63,7 @@ void main() {
   bool collided = false;
 
   // Obstacle threshold: more than ~1 particle ahead
-  if (presAhead.r > 0.016) {
-  // if (presAhead.r > 1.5 / 200.0) {
+  if (presAhead.r > u_collisionThresh) {
     float dodgeChance = hash(vec2(v_uv.x, 0.123)) * 0.6;
     float dodgeRoll = hash(vec2(v_uv.x, u_time));
 

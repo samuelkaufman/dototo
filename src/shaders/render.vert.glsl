@@ -1,12 +1,14 @@
 attribute float a_index;
 uniform sampler2D u_state;
-uniform float u_count;
+uniform vec2 u_texSize;
 varying float v_colorIndex;
 varying float v_energy;
 
 void main() {
-  float u = (a_index + 0.5) / u_count;
-  vec4 data = texture2D(u_state, vec2(u, 0.5));
+  float row = floor(a_index / u_texSize.x);
+  float col = a_index - row * u_texSize.x;
+  vec2 uv = vec2((col + 0.5) / u_texSize.x, (row + 0.5) / u_texSize.y);
+  vec4 data = texture2D(u_state, uv);
   float x = data.r * 2.0 - 1.0;
   float y = data.g * 2.0 - 1.0;
 
