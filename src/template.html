@@ -13,14 +13,18 @@
 <canvas id="c"></canvas>
 <script>
 // ===================== CONSTANTS YOU CAN MODIFY =====================
-const NUM_PARTICLES = 20000;
-const NUM_POPULATIONS = 2;
+// const NUM_PARTICLES = 20000;
+const NUM_PARTICLES= Math.floor(Math.random()*20000)+10000;
+const NUM_POPULATIONS = Math.floor(Math.random()*8)+1;
+// const NUM_POPULATIONS = 2;
 const MUTATION_CHANCE = 0.000;
-const BASE_SPEED = 0.05;
+const BASE_SPEED = .1 * Math.random();
+// const BASE_SPEED = (Math.floor(Math.random() * 10)+1) / 500;
 const LOOKAHEAD_PX = 10;
-const PRESENCE_PAD = .2;       // extra pixels added to presence point size
+const PRESENCE_PAD = .4;       // extra pixels added to presence point size
 const COLLISION_THRESH = 0.016; // presence.r threshold to trigger collision
 // ====================================================================
+console.log("NUM_POPULATIONS:", NUM_POPULATIONS);
 
 window.addEventListener('keydown', (e) => {
   if (e.key === ' ') {
