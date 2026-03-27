@@ -11,15 +11,6 @@ uniform float u_collisionThresh;
 
 const float PI = 3.14159265359;
 
-// Energy constants
-const float BASE_DRAIN = 0.0003;
-const float SPEED_COST = 0.00005;
-const float SIZE_COST = 0.00003;
-const float FOOD_GAIN = 0.002;
-const float FOOD_THRESHOLD = 0.3;
-const float COLLISION_COST = 0.0001;
-const float FLOCK_BONUS = 0.0002;
-const float REBIRTH_ENERGY = 0.45;
 
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -45,13 +36,12 @@ void main() {
 
   // Unpack A channel: integer part = size*8 + speed, fractional part = energy
   float intPart = floor(data.a);
-  float energy = data.a - intPart;
   float size = floor(intPart / 8.0);
   float speed = intPart - size * 8.0;
 
   // === MOVEMENT ===
   vec2 moveDir = dirVec(direction);
-  float speedMul = 0.5 + speed / 7.0 * 1.5; // 0.5 to 2.0
+  float speedMul = speed; // 0.5 to 2.0
 
   // Convert lookahead from pixels to UV space
   vec2 laUV = vec2(u_lookahead / u_resolution.x, u_lookahead / u_resolution.y);
@@ -113,8 +103,7 @@ void main() {
 
   // Re-pack
   float new_b = color * 8.0 + direction;
-  // float new_a = floor(size * 8.0 + speed); // + energy;
-  float new_a = 25.0;
+  float new_a = floor(size * 8.0 + speed);
 
   gl_FragColor = vec4(x, y, new_b, new_a);
 }

@@ -2,7 +2,7 @@ attribute float a_index;
 uniform sampler2D u_state;
 uniform vec2 u_texSize;
 varying float v_colorIndex;
-varying float v_energy;
+varying float v_speed;
 
 void main() {
   float row = floor(a_index / u_texSize.x);
@@ -18,8 +18,9 @@ void main() {
 
   // Unpack A channel: integer part = size*8 + speed, fractional part = energy
   float intPart = floor(data.a);
-  float size = floor(intPart / 8.0);    // 0-7
-  v_energy = data.a - intPart;          // 0.0-0.9
+  float sz = floor(intPart / 8.0);    // 0-7
+  float size = 3.0;
+  v_speed = intPart - sz * 8.0;
 
   gl_Position = vec4(x, y, 0.0, 1.0);
   gl_PointSize = size + 1.0;  // 1-8 pixels

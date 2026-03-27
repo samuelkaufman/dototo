@@ -14,17 +14,29 @@
 <script>
 // ===================== CONSTANTS YOU CAN MODIFY =====================
 // const NUM_PARTICLES = 20000;
-const NUM_PARTICLES= Math.floor(Math.random()*20000)+10000;
-const NUM_POPULATIONS = Math.floor(Math.random()*8)+1;
+const NUM_PARTICLES= Math.floor(Math.random()*10000)+10000;
+const NUM_POPULATIONS = Math.floor(Math.random()*4)+1;
 // const NUM_POPULATIONS = 2;
 const MUTATION_CHANCE = 0.000;
-const BASE_SPEED = .1 * Math.random();
+const BASE_SPEED = .001 * Math.random();
+
 // const BASE_SPEED = (Math.floor(Math.random() * 10)+1) / 500;
-const LOOKAHEAD_PX = 10;
+const LOOKAHEAD_PX = Math.floor(Math.random()*4)+5;
+// const LOOKAHEAD_PX = 10;
 const PRESENCE_PAD = .4;       // extra pixels added to presence point size
 const COLLISION_THRESH = 0.016; // presence.r threshold to trigger collision
 // ====================================================================
 console.log("NUM_POPULATIONS:", NUM_POPULATIONS);
+console.log("NUM_PARTICLES:", NUM_PARTICLES);
+// const NUM_PARTICLES= Math.floor(Math.random()*20000)+10000;
+// const NUM_POPULATIONS = Math.floor(Math.random()*8)+1;
+console.log("NUM_POPULATIONS:", NUM_POPULATIONS);
+console.log("BASE_SPEED:", BASE_SPEED);
+console.log("LOOKAHEAD_PX:", LOOKAHEAD_PX);
+console.log("MUTATION_CHANCE:", MUTATION_CHANCE);
+console.log("COLLISION_THRESH:", COLLISION_THRESH);
+console.log("PRESENCE_PAD:", PRESENCE_PAD);
+
 
 window.addEventListener('keydown', (e) => {
   if (e.key === ' ') {
@@ -150,7 +162,7 @@ for (let i = 0; i < NUM_PARTICLES; i++) {
   initData[b + 0] = Math.random();                                  // x
   initData[b + 1] = Math.random();                                  // y
   initData[b + 2] = (pop.color * 8 + pop.direction);                // packed color+direction
-  initData[b + 3] = Math.floor(pop.size * 8 + pop.speed) + 0.45;   // packed size+speed + energy
+  initData[b + 3] = Math.floor(pop.size * 8 + pop.speed);   // packed size+speed + energy
 }
 
 function makeTex(data, w, h, type, filter) {
