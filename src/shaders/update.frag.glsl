@@ -17,10 +17,9 @@ float hash(vec2 p) {
 }
 
 
-// Direction index 0-7 -> movement vector
-// 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW
+// Direction index 0-15 -> movement vector (22.5° steps)
 vec2 dirVec(float dir) {
-  float angle = dir * PI / 4.0;
+  float angle = dir * PI / 8.0;
   return vec2(sin(angle), cos(angle));
 }
 
@@ -29,15 +28,15 @@ void main() {
   float x = data.r;
   float y = data.g;
 
-  // Unpack B channel: color*8 + direction
+  // Unpack B channel: color*16 + direction
   float packed_b = floor(data.b + 0.5);
-  float color = floor(packed_b / 8.0);
-  float direction = packed_b - color * 8.0;
+  float color = floor(packed_b / 16.0);
+  float direction = packed_b - color * 16.0;
 
   // Unpack A channel: integer part = size*8 + speed, fractional part = energy
   float intPart = floor(data.a);
   float size = floor(intPart / 8.0);
-  float speed = intPart - size * 8.0;
+  float speed = (intPart - size * 8.0)+.2;
 
   // === MOVEMENT ===
   vec2 moveDir = dirVec(direction);
@@ -60,8 +59,8 @@ void main() {
     if (dodgeRoll < dodgeChance) {
       float sideRoll = hash(vec2(v_uv.x, u_time * 2.0));
       float dodgeDir = sideRoll < 0.5
-        ? mod(direction + 2.0, 8.0)
-        : mod(direction + 6.0, 8.0);
+        ? mod(direction + 4.0, 16.0)
+        : mod(direction + 12.0, 16.0);
 
       vec2 dodgeMoveDir = dirVec(dodgeDir);
       vec2 dodgeAhead = fract(vec2(x, y) + dodgeMoveDir * laUV + 1.0);
@@ -102,7 +101,7 @@ void main() {
 
 
   // Re-pack
-  float new_b = color * 8.0 + direction;
+  float new_b = color * 16.0 + direction;
   float new_a = floor(size * 8.0 + speed);
 
   gl_FragColor = vec4(x, y, new_b, new_a);

@@ -25,6 +25,7 @@ function makeRng(seed) {
 
 function parseFragment() {
   const p = {};
+  return p;
   for (const part of location.hash.slice(1).split('&')) {
     const eq = part.indexOf('=');
     if (eq > 0) p[part.slice(0, eq)] = part.slice(eq + 1);
@@ -43,14 +44,18 @@ function main() {
 
   // Constants — fragment params override, otherwise seeded-random
   // const NUM_PARTICLES    = frag.n   !== undefined ? +frag.n   : Math.floor(rng() * 10000) + 10000;
-  const NUM_PARTICLES    = frag.n   !== undefined ? +frag.n   : Math.floor(rng() * 10000) + 10000;
+  // const NUM_PARTICLES    = frag.n   !== undefined ? +frag.n   : Math.floor(rng() * 10000) + 5000;
+  const NUM_PARTICLES    = 10000*4;
   // const NUM_POPULATIONS  = frag.p   !== undefined ? +frag.p   : Math.floor(rng() * 8) + 1;
-  const NUM_POPULATIONS  = 2;
+  const NUM_POPULATIONS  = 6.0;
   const MUTATION_CHANCE  = frag.m   !== undefined ? +frag.m   : 0;
-  const BASE_SPEED       = frag.s   !== undefined ? +frag.s   : rng() * 0.1;
-  const LOOKAHEAD_PX     = frag.l   !== undefined ? +frag.l   : Math.floor(rng() * 20) + 10;
-  const PRESENCE_PAD     = frag.pad !== undefined ? +frag.pad : 0.4;
+  // const BASE_SPEED       = frag.s   !== undefined ? +frag.s   : rng() * 0.01;
+  const BASE_SPEED       = .01;
+  const LOOKAHEAD_PX     = frag.l   !== undefined ? +frag.l   : Math.floor(rng() * 4) + 8;
+  const PRESENCE_PAD     = .01;
   const COLLISION_THRESH = frag.ct  !== undefined ? +frag.ct  : 0.016;
+  const GRAYSCALE        = frag.gs  !== undefined ? +frag.gs  : 0;
+  const HUE_SHIFT        = frag.hue !== undefined ? +frag.hue : rng(); // seed-based color mood
 
   // Stamp all resolved values into the URL so it's bookmarkable
   history.replaceState(null, '', '#' + [
@@ -62,9 +67,11 @@ function main() {
     `l=${LOOKAHEAD_PX}`,
     `pad=${PRESENCE_PAD}`,
     `ct=${COLLISION_THRESH}`,
+    `gs=${GRAYSCALE}`,
+    `hue=${HUE_SHIFT.toFixed(4)}`,
   ].join('&'));
 
-  console.log({ seed, NUM_PARTICLES, NUM_POPULATIONS, MUTATION_CHANCE, BASE_SPEED, LOOKAHEAD_PX, PRESENCE_PAD, COLLISION_THRESH });
+  console.log({ seed, NUM_PARTICLES, NUM_POPULATIONS, MUTATION_CHANCE, BASE_SPEED, LOOKAHEAD_PX, PRESENCE_PAD, COLLISION_THRESH, GRAYSCALE, HUE_SHIFT });
 
   // Space = randomize: pick a new seed, let everything else regenerate from it
   window.addEventListener('keydown', e => {
@@ -146,10 +153,17 @@ function main() {
   const renderVS = `__RENDER_VERT__`;
   const renderFS = `__RENDER_FRAG__`;
 
-  const renderProg       = createProgram(renderVS, renderFS);
-  const u_render_state   = gl.getUniformLocation(renderProg, 'u_state');
-  const u_render_texSize = gl.getUniformLocation(renderProg, 'u_texSize');
-  const a_render_index   = gl.getAttribLocation(renderProg, 'a_index');
+  const renderProg            = createProgram(renderVS, renderFS);
+  const u_render_state        = gl.getUniformLocation(renderProg, 'u_state');
+  const u_render_texSize      = gl.getUniformLocation(renderProg, 'u_texSize');
+  const u_render_grayscale    = gl.getUniformLocation(renderProg, 'u_grayscale');
+  const u_render_hueShift     = gl.getUniformLocation(renderProg, 'u_hueShift');
+  const a_render_index        = gl.getAttribLocation(renderProg, 'a_index');
+
+  // Set render constants once (don't change per frame)
+  gl.useProgram(renderProg);
+  gl.uniform1f(u_render_grayscale, GRAYSCALE);
+  gl.uniform1f(u_render_hueShift, HUE_SHIFT);
 
   // ======================== BUFFERS ========================
 
@@ -179,7 +193,7 @@ function main() {
   for (let p = 0; p < NUM_POPULATIONS; p++) {
     populations.push({
       color:     Math.floor(rng() * 16),  // 0-15
-      direction: Math.floor(rng() * 8),   // 0-7
+      direction: Math.floor(rng() * 16),  // 0-15
       size:      Math.floor(rng() * 8),   // 0-7
       speed:     Math.floor(rng() * 8),   // 0-7
     });
@@ -190,7 +204,7 @@ function main() {
     const pop = populations[i % NUM_POPULATIONS];
     initData[b + 0] = rng();                                        // x
     initData[b + 1] = rng();                                        // y
-    initData[b + 2] = pop.color * 8 + pop.direction;               // packed color+direction
+    initData[b + 2] = pop.color * 16 + pop.direction;              // packed color+direction
     initData[b + 3] = Math.floor(pop.size * 8 + pop.speed);        // packed size+speed
   }
 

@@ -12,9 +12,9 @@ void main() {
   float x = data.r * 2.0 - 1.0;
   float y = data.g * 2.0 - 1.0;
 
-  // Unpack B channel: color*8 + direction
+  // Unpack B channel: color*16 + direction
   float packed_b = floor(data.b + 0.5);
-  v_colorIndex = floor(packed_b / 8.0);  // 0-15
+  v_colorIndex = floor(packed_b / 16.0);  // 0-15
 
   // Unpack A channel: integer part = size*8 + speed, fractional part = energy
   float intPart = floor(data.a);

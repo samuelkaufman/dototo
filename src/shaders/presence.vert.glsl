@@ -14,9 +14,9 @@ void main() {
   float x = data.r * 2.0 - 1.0;
   float y = data.g * 2.0 - 1.0;
 
-  // Unpack B channel: color*8 + direction
+  // Unpack B channel: color*16 + direction
   float packed_b = floor(data.b + 0.5);
-  v_color = floor(packed_b / 8.0);
+  v_color = floor(packed_b / 16.0);
 
   // Unpack A channel: size*8 + speed
   float packed_a = floor(data.a + 0.5);
