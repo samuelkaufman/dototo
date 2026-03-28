@@ -19,7 +19,8 @@ void main() {
   // Unpack A channel: integer part = size*8 + speed, fractional part = energy
   float intPart = floor(data.a);
   float sz = floor(intPart / 8.0);    // 0-7
-  float size = 3.0;
+  float size = (floor(intPart / 8.0)+1.0)/2.0;    // 0-7
+  // float size = 3.0;
   v_speed = intPart - sz * 8.0;
 
   gl_Position = vec4(x, y, 0.0, 1.0);
