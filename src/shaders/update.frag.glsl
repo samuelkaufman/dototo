@@ -71,8 +71,8 @@ void main() {
         y += dodgeMoveDir.y * u_baseSpeed * speedMul;
       } else {
         collided = true;
-        // x += moveDir.x * u_baseSpeed * speedMul;
-        // y += moveDir.y * u_baseSpeed * speedMul;
+        x += moveDir.x * u_baseSpeed * speedMul;
+        y += moveDir.y * u_baseSpeed * speedMul;
       }
     } else {
       collided = true;
