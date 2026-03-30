@@ -1,4 +1,5 @@
 precision highp float;
+// varying float v_colorIndex;
 varying vec2 v_uv;
 uniform sampler2D u_state;
 uniform sampler2D u_presence;
@@ -23,13 +24,21 @@ vec2 dirVec(float dir) {
   return vec2(sin(angle), cos(angle));
 }
 
+float clrIndex(float b) {
+    float _packed_b = floor(b + 0.5);
+    return floor( _packed_b / 16.0 );
+
+}
+
 void main() {
   vec4 data = texture2D(u_state, v_uv);
   float x = data.r;
   float y = data.g;
+  float packed_b = floor(data.b + 0.5);
+  float curClr = clrIndex(data.b);
+  // v_colorIndex = floor(packed_b / 16.0);  // 0-15
 
   // Unpack B channel: color*16 + direction
-  float packed_b = floor(data.b + 0.5);
   float color = floor(packed_b / 16.0);
   float direction = packed_b - color * 16.0;
 
@@ -48,6 +57,7 @@ void main() {
   // Sample presence map ahead
   vec2 ahead = fract(vec2(x, y) + moveDir * laUV + 1.0);
   vec4 presAhead = texture2D(u_presence, ahead);
+  float clrAhead = clrIndex(presAhead.b);
 
   bool collided = false;
 
@@ -74,8 +84,17 @@ void main() {
         x += moveDir.x * u_baseSpeed * speedMul;
         y += moveDir.y * u_baseSpeed * speedMul;
       }
-    } else {
+    } if(clrAhead == curClr ){ 
+        collided = true;
+        // x = 1.0;
+        // y = 1.0;
+        // x += moveDir.x * 22.0;
+        // y += moveDir.y * 22.0;
+
+    }else {
       collided = true;
+        // x = 0.0;
+        // y = 0.0;
       // x += moveDir.x * u_baseSpeed * speedMul;
       // y += moveDir.y * u_baseSpeed * speedMul;
     }
@@ -103,6 +122,9 @@ void main() {
   // Re-pack
   float new_b = color * 16.0 + direction;
   float new_a = floor(size * 8.0 + speed);
-
+  // x = 1.0;
+  // y = 1.0;
   gl_FragColor = vec4(x, y, new_b, new_a);
 }
+
+// file:///Users/skaufman/opencoder/projects/shaders/dots/dist/index.html#seed=3795771992&n=14478&p=3&m=0&s=0.001000&l=13&pad=1.01&ct=0.016&gs=1&hue=0.9163
