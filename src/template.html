@@ -51,7 +51,8 @@ function main() {
   // const NUM_POPULATIONS  = 6.0;
   const MUTATION_CHANCE  = frag.m   !== undefined ? +frag.m   : 0;
   // const BASE_SPEED       = frag.s   !== undefined ? +frag.s   : rng() * 0.01;
-  const BASE_SPEED       = .00025;
+  const BASE_SPEED       = .001;
+  // const BASE_SPEED       = .00025;
   const LOOKAHEAD_PX     = frag.l   !== undefined ? +frag.l   : Math.floor(rng() * 25) + 8;
   const PRESENCE_PAD     = .01;
   const COLLISION_THRESH = frag.ct  !== undefined ? +frag.ct  : 0.016;
