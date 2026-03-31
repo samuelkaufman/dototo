@@ -47,11 +47,11 @@ function main() {
   // const NUM_PARTICLES    = frag.n   !== undefined ? +frag.n   : Math.floor(rng() * 10000) + 5000;
   const NUM_PARTICLES    = Math.floor(rng() * 30000) + 5000;
   // const NUM_PARTICLES    = 10000*4;
-  const NUM_POPULATIONS  = frag.p   !== undefined ? +frag.p   : Math.floor(rng() * 5) + 1;
+  const NUM_POPULATIONS  = frag.p   !== undefined ? +frag.p   : Math.floor(rng() * 5) + 3;
   // const NUM_POPULATIONS  = 6.0;
   const MUTATION_CHANCE  = frag.m   !== undefined ? +frag.m   : 0;
   // const BASE_SPEED       = frag.s   !== undefined ? +frag.s   : rng() * 0.01;
-  const BASE_SPEED       = .00075;
+  const BASE_SPEED       = .00025;
   const LOOKAHEAD_PX     = frag.l   !== undefined ? +frag.l   : Math.floor(rng() * 25) + 8;
   const PRESENCE_PAD     = .01;
   const COLLISION_THRESH = frag.ct  !== undefined ? +frag.ct  : 0.016;
@@ -193,12 +193,14 @@ function main() {
   const populations = [];
   for (let p = 0; p < NUM_POPULATIONS; p++) {
     populations.push({
-      color:     Math.floor(rng() * 16),  // 0-15
+      color:     Math.floor(rng() * 3),  // 0-2
+      // color:     Math.floor(rng() * 16),  // 0-15
       direction: Math.floor(rng() * 16),  // 0-15
       size:      Math.floor(rng() * 8),   // 0-7
       speed:     Math.floor(rng() * 8),   // 0-7
     });
   }
+  console.log('Populations:', populations);
 
   for (let i = 0; i < NUM_PARTICLES; i++) {
     const b   = i * 4;

@@ -60,48 +60,82 @@ void main() {
   float clrAhead = clrIndex(presAhead.b);
 
   bool collided = false;
-
-  // Obstacle threshold: more than ~1 particle ahead
+ // 0 and 2 are friends, 1 and 3 are foes
+  float dirModifier = 1.0;
   if (presAhead.r > u_collisionThresh) {
-    float dodgeChance = hash(vec2(v_uv.x, 0.123)) * 0.6;
-    float dodgeRoll = hash(vec2(v_uv.x, u_time));
-
-    if (dodgeRoll < dodgeChance) {
-      float sideRoll = hash(vec2(v_uv.x, u_time * 2.0));
-      float dodgeDir = sideRoll < 0.5
-        ? mod(direction + 4.0, 16.0)
-        : mod(direction + 12.0, 16.0);
-
-      vec2 dodgeMoveDir = dirVec(dodgeDir);
-      vec2 dodgeAhead = fract(vec2(x, y) + dodgeMoveDir * laUV + 1.0);
-      vec4 presDodge = texture2D(u_presence, dodgeAhead);
-
-      if (presDodge.r < 1.0 / 64.0) {
-        x += dodgeMoveDir.x * u_baseSpeed * speedMul;
-        y += dodgeMoveDir.y * u_baseSpeed * speedMul;
-      } else {
-        collided = true;
-        x += moveDir.x * u_baseSpeed * speedMul;
-        y += moveDir.y * u_baseSpeed * speedMul;
-      }
-    } if(clrAhead == curClr ){ 
-        collided = true;
+    if(clrAhead < curClr ){ 
+      dirModifier = -1.0;
+        // collided = true;
         // x = 1.0;
         // y = 1.0;
         // x += moveDir.x * 22.0;
         // y += moveDir.y * 22.0;
 
-    }else {
-      collided = true;
+    } else {
+      dirModifier = 0.0;
+        // collided = true;
         // x = 0.0;
         // y = 0.0;
-      // x += moveDir.x * u_baseSpeed * speedMul;
-      // y += moveDir.y * u_baseSpeed * speedMul;
     }
-  } else {
-    x += moveDir.x * u_baseSpeed * speedMul;
-    y += moveDir.y * u_baseSpeed * speedMul;
   }
+    x += dirVec(direction * dirModifier).x * u_baseSpeed * speedMul;
+    y += dirVec(direction * dirModifier).y * u_baseSpeed * speedMul;
+  // if( curClr == 0.0 ) {
+  //   // x += 20.0;
+  //   x += u_baseSpeed * speedMul;
+  // } else if( curClr == 1.0 ) { 
+  //   x -= u_baseSpeed * speedMul;
+  // } else if( curClr == 2.0 ) {
+  //   y += u_baseSpeed * speedMul;
+  // } else if( curClr == 3.0 ) {
+  //   y -= u_baseSpeed * speedMul;
+  // } 
+      // collided = true;
+      // x = 1.0;
+      // y = 1.0;
+      // x += moveDir.x * 22.0;
+      // y += moveDir.y * 22.0;
+  // Obstacle threshold: more than ~1 particle ahead
+  // if (presAhead.r > u_collisionThresh) {
+  //   float dodgeChance = hash(vec2(v_uv.x, 0.123)) * 0.6;
+  //   float dodgeRoll = hash(vec2(v_uv.x, u_time));
+
+  //   if (dodgeRoll < dodgeChance) {
+  //     float sideRoll = hash(vec2(v_uv.x, u_time * 2.0));
+  //     float dodgeDir = sideRoll < 0.5
+  //       ? mod(direction + 4.0, 16.0)
+  //       : mod(direction + 12.0, 16.0);
+
+  //     vec2 dodgeMoveDir = dirVec(dodgeDir);
+  //     vec2 dodgeAhead = fract(vec2(x, y) + dodgeMoveDir * laUV + 1.0);
+  //     vec4 presDodge = texture2D(u_presence, dodgeAhead);
+
+  //     if (presDodge.r < 1.0 / 64.0) {
+  //       x += dodgeMoveDir.x * u_baseSpeed * speedMul;
+  //       y += dodgeMoveDir.y * u_baseSpeed * speedMul;
+  //     } else {
+  //       collided = true;
+  //       x += moveDir.x * u_baseSpeed * speedMul;
+  //       y += moveDir.y * u_baseSpeed * speedMul;
+  //     }
+  //   } if(clrAhead == curClr ){ 
+  //       collided = true;
+  //       // x = 1.0;
+  //       // y = 1.0;
+  //       // x += moveDir.x * 22.0;
+  //       // y += moveDir.y * 22.0;
+
+  //   }else {
+  //     collided = true;
+  //       // x = 0.0;
+  //       // y = 0.0;
+  //     // x += moveDir.x * u_baseSpeed * speedMul;
+  //     // y += moveDir.y * u_baseSpeed * speedMul;
+  //   }
+  // } else {
+  //   x += moveDir.x * u_baseSpeed * speedMul;
+  //   y += moveDir.y * u_baseSpeed * speedMul;
+  // }
 
   // Toroidal wrapping
   x = fract(x + 1.0);
