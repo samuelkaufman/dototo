@@ -45,14 +45,14 @@ function main() {
   // Constants — fragment params override, otherwise seeded-random
   // const NUM_PARTICLES    = frag.n   !== undefined ? +frag.n   : Math.floor(rng() * 10000) + 10000;
   // const NUM_PARTICLES    = frag.n   !== undefined ? +frag.n   : Math.floor(rng() * 10000) + 5000;
-  const NUM_PARTICLES    = Math.floor(rng() * 10000) + 5000;
+  const NUM_PARTICLES    = Math.floor(rng() * 30000) + 5000;
   // const NUM_PARTICLES    = 10000*4;
-  // const NUM_POPULATIONS  = frag.p   !== undefined ? +frag.p   : Math.floor(rng() * 8) + 1;
-  const NUM_POPULATIONS  = 6.0;
+  const NUM_POPULATIONS  = frag.p   !== undefined ? +frag.p   : Math.floor(rng() * 5) + 3;
+  // const NUM_POPULATIONS  = 6.0;
   const MUTATION_CHANCE  = frag.m   !== undefined ? +frag.m   : 0;
   // const BASE_SPEED       = frag.s   !== undefined ? +frag.s   : rng() * 0.01;
-  const BASE_SPEED       = .001;
-  const LOOKAHEAD_PX     = frag.l   !== undefined ? +frag.l   : Math.floor(rng() * 4) + 8;
+  const BASE_SPEED       = .00025;
+  const LOOKAHEAD_PX     = frag.l   !== undefined ? +frag.l   : Math.floor(rng() * 25) + 8;
   const PRESENCE_PAD     = .01;
   const COLLISION_THRESH = frag.ct  !== undefined ? +frag.ct  : 0.016;
   const GRAYSCALE        = frag.gs  !== undefined ? +frag.gs  : 0;
@@ -187,6 +187,7 @@ void main() {
   gl_Position = vec4(a_pos, 0.0, 1.0);
 }`;
   const updateFS = `precision highp float;
+// varying float v_colorIndex;
 varying vec2 v_uv;
 uniform sampler2D u_state;
 uniform sampler2D u_presence;
@@ -211,13 +212,21 @@ vec2 dirVec(float dir) {
   return vec2(sin(angle), cos(angle));
 }
 
+float clrIndex(float b) {
+    float _packed_b = floor(b + 0.5);
+    return floor( _packed_b / 16.0 );
+
+}
+
 void main() {
   vec4 data = texture2D(u_state, v_uv);
   float x = data.r;
   float y = data.g;
+  float packed_b = floor(data.b + 0.5);
+  float curClr = clrIndex(data.b);
+  // v_colorIndex = floor(packed_b / 16.0);  // 0-15
 
   // Unpack B channel: color*16 + direction
-  float packed_b = floor(data.b + 0.5);
   float color = floor(packed_b / 16.0);
   float direction = packed_b - color * 16.0;
 
@@ -236,41 +245,85 @@ void main() {
   // Sample presence map ahead
   vec2 ahead = fract(vec2(x, y) + moveDir * laUV + 1.0);
   vec4 presAhead = texture2D(u_presence, ahead);
+  float clrAhead = clrIndex(presAhead.b);
 
   bool collided = false;
-
-  // Obstacle threshold: more than ~1 particle ahead
+ // 0 and 2 are friends, 1 and 3 are foes
+  float dirModifier = 1.0;
   if (presAhead.r > u_collisionThresh) {
-    float dodgeChance = hash(vec2(v_uv.x, 0.123)) * 0.6;
-    float dodgeRoll = hash(vec2(v_uv.x, u_time));
+    if(clrAhead < curClr ){ 
+      dirModifier = -1.0;
+        // collided = true;
+        // x = 1.0;
+        // y = 1.0;
+        // x += moveDir.x * 22.0;
+        // y += moveDir.y * 22.0;
 
-    if (dodgeRoll < dodgeChance) {
-      float sideRoll = hash(vec2(v_uv.x, u_time * 2.0));
-      float dodgeDir = sideRoll < 0.5
-        ? mod(direction + 4.0, 16.0)
-        : mod(direction + 12.0, 16.0);
-
-      vec2 dodgeMoveDir = dirVec(dodgeDir);
-      vec2 dodgeAhead = fract(vec2(x, y) + dodgeMoveDir * laUV + 1.0);
-      vec4 presDodge = texture2D(u_presence, dodgeAhead);
-
-      if (presDodge.r < 1.0 / 64.0) {
-        x += dodgeMoveDir.x * u_baseSpeed * speedMul;
-        y += dodgeMoveDir.y * u_baseSpeed * speedMul;
-      } else {
-        collided = true;
-        // x += moveDir.x * u_baseSpeed * speedMul;
-        // y += moveDir.y * u_baseSpeed * speedMul;
-      }
     } else {
-      collided = true;
-      // x += moveDir.x * u_baseSpeed * speedMul;
-      // y += moveDir.y * u_baseSpeed * speedMul;
+      dirModifier = 0.0;
+        // collided = true;
+        // x = 0.0;
+        // y = 0.0;
     }
-  } else {
-    x += moveDir.x * u_baseSpeed * speedMul;
-    y += moveDir.y * u_baseSpeed * speedMul;
   }
+    x += dirVec(direction * dirModifier).x * u_baseSpeed * speedMul;
+    y += dirVec(direction * dirModifier).y * u_baseSpeed * speedMul;
+  // if( curClr == 0.0 ) {
+  //   // x += 20.0;
+  //   x += u_baseSpeed * speedMul;
+  // } else if( curClr == 1.0 ) { 
+  //   x -= u_baseSpeed * speedMul;
+  // } else if( curClr == 2.0 ) {
+  //   y += u_baseSpeed * speedMul;
+  // } else if( curClr == 3.0 ) {
+  //   y -= u_baseSpeed * speedMul;
+  // } 
+      // collided = true;
+      // x = 1.0;
+      // y = 1.0;
+      // x += moveDir.x * 22.0;
+      // y += moveDir.y * 22.0;
+  // Obstacle threshold: more than ~1 particle ahead
+  // if (presAhead.r > u_collisionThresh) {
+  //   float dodgeChance = hash(vec2(v_uv.x, 0.123)) * 0.6;
+  //   float dodgeRoll = hash(vec2(v_uv.x, u_time));
+
+  //   if (dodgeRoll < dodgeChance) {
+  //     float sideRoll = hash(vec2(v_uv.x, u_time * 2.0));
+  //     float dodgeDir = sideRoll < 0.5
+  //       ? mod(direction + 4.0, 16.0)
+  //       : mod(direction + 12.0, 16.0);
+
+  //     vec2 dodgeMoveDir = dirVec(dodgeDir);
+  //     vec2 dodgeAhead = fract(vec2(x, y) + dodgeMoveDir * laUV + 1.0);
+  //     vec4 presDodge = texture2D(u_presence, dodgeAhead);
+
+  //     if (presDodge.r < 1.0 / 64.0) {
+  //       x += dodgeMoveDir.x * u_baseSpeed * speedMul;
+  //       y += dodgeMoveDir.y * u_baseSpeed * speedMul;
+  //     } else {
+  //       collided = true;
+  //       x += moveDir.x * u_baseSpeed * speedMul;
+  //       y += moveDir.y * u_baseSpeed * speedMul;
+  //     }
+  //   } if(clrAhead == curClr ){ 
+  //       collided = true;
+  //       // x = 1.0;
+  //       // y = 1.0;
+  //       // x += moveDir.x * 22.0;
+  //       // y += moveDir.y * 22.0;
+
+  //   }else {
+  //     collided = true;
+  //       // x = 0.0;
+  //       // y = 0.0;
+  //     // x += moveDir.x * u_baseSpeed * speedMul;
+  //     // y += moveDir.y * u_baseSpeed * speedMul;
+  //   }
+  // } else {
+  //   x += moveDir.x * u_baseSpeed * speedMul;
+  //   y += moveDir.y * u_baseSpeed * speedMul;
+  // }
 
   // Toroidal wrapping
   x = fract(x + 1.0);
@@ -291,10 +344,12 @@ void main() {
   // Re-pack
   float new_b = color * 16.0 + direction;
   float new_a = floor(size * 8.0 + speed);
-
+  // x = 1.0;
+  // y = 1.0;
   gl_FragColor = vec4(x, y, new_b, new_a);
 }
-`;
+
+// file:///Users/skaufman/opencoder/projects/shaders/dots/dist/index.html#seed=3795771992&n=14478&p=3&m=0&s=0.001000&l=13&pad=1.01&ct=0.016&gs=1&hue=0.9163`;
 
   const updateProg             = createProgram(updateVS, updateFS);
   const u_update_state         = gl.getUniformLocation(updateProg, 'u_state');
@@ -413,12 +468,14 @@ void main() {
   const populations = [];
   for (let p = 0; p < NUM_POPULATIONS; p++) {
     populations.push({
-      color:     Math.floor(rng() * 16),  // 0-15
+      color:     Math.floor(rng() * 3),  // 0-2
+      // color:     Math.floor(rng() * 16),  // 0-15
       direction: Math.floor(rng() * 16),  // 0-15
       size:      Math.floor(rng() * 8),   // 0-7
       speed:     Math.floor(rng() * 8),   // 0-7
     });
   }
+  console.log('Populations:', populations);
 
   for (let i = 0; i < NUM_PARTICLES; i++) {
     const b   = i * 4;
